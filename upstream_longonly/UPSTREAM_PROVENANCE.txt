@@ -1,0 +1,4 @@
+Source: /opt/testerdonch
+Imported_at_utc: <fill manually>
+Method: rsync snapshot
+Notes: <optional>
