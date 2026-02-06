@@ -156,9 +156,34 @@ def metrics_from_trades_and_equity(trades_csv: Path, equity_csv: Path) -> dict:
 
     return out
 
-def _tag_entry(dd, vm, vmult, vq, er, pb, close_above) -> str:
-    vstr = f"{vm}{vmult if vmult is not None else vq}"
-    return f"DON_DAYS-{dd}_VOL-{vstr}_ENTRY-{er}_PB-{pb}_CONF-{int(bool(close_above))}"
+def _tag_entry(variant: dict) -> str:
+    """
+    Compact tag for entry variants (short-only).
+    Example: B48_S12_T0.015_A3_trg-stall_FZ1.5
+    """
+    def _fmt(v) -> str:
+        if isinstance(v, float):
+            return f"{v:.4g}"
+        return str(v)
+
+    parts = []
+    if "BOOM_WIN" in variant:
+        parts.append(f"B{_fmt(variant['BOOM_WIN'])}")
+    if "STALL_WIN" in variant:
+        parts.append(f"S{_fmt(variant['STALL_WIN'])}")
+    if "BOOM_THRESH" in variant:
+        parts.append(f"T{_fmt(variant['BOOM_THRESH'])}")
+    if "STALL_ATR_MAX" in variant:
+        parts.append(f"A{_fmt(variant['STALL_ATR_MAX'])}")
+    if "TRIGGER_TYPE" in variant:
+        parts.append(f"trg-{str(variant['TRIGGER_TYPE'])}")
+    if variant.get("USE_FUNDING_GATE") or variant.get("FUNDING_GATE_ENABLED"):
+        parts.append("FUND")
+    if "FUNDING_Z_MIN" in variant:
+        parts.append(f"FZ{_fmt(variant['FUNDING_Z_MIN'])}")
+    if "FUNDING_Z_THRESHOLD" in variant:
+        parts.append(f"FZ{_fmt(variant['FUNDING_Z_THRESHOLD'])}")
+    return "_".join(parts)
 
 def _tag_exit(sl, tp, te, p_en, p_ratio, tp1, tr_en, tr_mult) -> str:
     te_str = "None" if (te is None) else f"{float(te):.1f}"
@@ -193,6 +218,20 @@ def main():
 
     if args.start: cfg.START_DATE = args.start
     if args.end:   cfg.END_DATE   = args.end
+
+    # --- PRE-FLIGHT CHECK ---
+    # Force non-streaming to ensure signals are fully materialized for caching
+    cfg.SCOUT_STREAMING = False
+    from shared_utils import get_symbols_from_file
+    symbols = get_symbols_from_file()
+    symbols_file = getattr(cfg, "SYMBOLS_FILE", "symbols.txt")
+    print("\n" + "=" * 60)
+    print("SWEEP CONFIGURATION CHECK")
+    print(f"Timeframe:   {cfg.START_DATE} to {cfg.END_DATE}")
+    print(f"Universe:    {len(symbols)} symbols (from {symbols_file})")
+    print("Streaming:   DISABLED (Forced for sweep caching)")
+    print("=" * 60 + "\n")
+
     cfg.USE_INTRABAR_1M = bool(getattr(args, "use_1m", False))
 
     # ------ ENTRY GRID ------
@@ -218,7 +257,7 @@ def main():
         sig_path = ensure_signals(variant)
         if not sig_path.exists():
             continue
-        ent_tag = f"{args.archetype}_{_hash_entry_cfg(variant)}"
+        ent_tag = f"{args.archetype}_{_tag_entry(variant)}"
         for sl in sls:
             for tp in tps:
                 for te in time_exits:
