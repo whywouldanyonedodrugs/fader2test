@@ -56,18 +56,37 @@ def _sha256_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
     return h.hexdigest()
 
 
-def _detect_ts_col(df: pd.DataFrame, ts_col: Optional[str]) -> str:
-    if ts_col:
-        if ts_col not in df.columns:
-            raise ValueError(f"--ts-col {ts_col!r} not found in columns={list(df.columns)}")
-        return ts_col
-    cols_l = {c.lower(): c for c in df.columns}
-    for cand in TS_CANDIDATES:
-        if cand in cols_l:
-            return cols_l[cand]
+def _detect_ts_col(df, ts_col: str | None) -> str:
+    """
+    Determine where timestamps live.
+    Returns:
+      - a column name, OR
+      - the special token "index" meaning: use df.index
+    """
+
+    # Explicit override
+    if ts_col is not None:
+        if ts_col.lower() == "index":
+            if isinstance(df.index, pd.DatetimeIndex):
+                return "index"
+            raise ValueError(f"--ts-col index requested but df.index is not a DatetimeIndex (got {type(df.index)})")
+        if ts_col in df.columns:
+            return ts_col
+        raise ValueError(f"--ts-col {ts_col!r} not found. Columns={list(df.columns)} index={type(df.index)}")
+
+    # Auto-detect: prefer datetime index if present
+    if isinstance(df.index, pd.DatetimeIndex):
+        return "index"
+
+    # Auto-detect: look for common timestamp column names
+    candidates = ("timestamp", "ts", "time", "datetime", "open_time", "close_time", "__index_level_0__", "index")
+    for c in candidates:
+        if c in df.columns:
+            return c
+
     raise ValueError(
-        f"Could not detect timestamp column. Provide --ts-col. "
-        f"Looked for {TS_CANDIDATES}. Columns={list(df.columns)}"
+        "Could not detect timestamp column. Provide --ts-col. "
+        f"Looked for {candidates}. Columns={list(df.columns)} index={type(df.index)}"
     )
 
 
@@ -137,7 +156,18 @@ class SliceSpec:
 def _slice_one_file(in_path: Path, out_path: Path, symbol: str, spec: SliceSpec) -> Tuple[int, str]:
     df = pd.read_parquet(in_path)
     ts_col = _detect_ts_col(df, spec.ts_col)
-    ts = _normalize_ts_series(df[ts_col], spec.ts_unit)
+
+    # ts_col may be a real column name or the special token "index"
+    ts_src = df.index if ts_col == "index" else df[ts_col]
+    ts = _normalize_ts_series(ts_src, spec.ts_unit)
+
+    # Apply normalized timestamps back onto df so downstream logic is consistent
+    df = df.copy()
+    if ts_col == "index":
+        df.index = pd.DatetimeIndex(ts, name=df.index.name or "timestamp")
+    else:
+        df[ts_col] = ts
+
 
     mask = (ts >= spec.start) & (ts < spec.end)
     out_df = df.loc[mask].copy()
