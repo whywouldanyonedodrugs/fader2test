@@ -18,7 +18,12 @@ import pyarrow.parquet as pq
 
 import config as cfg
 from indicators import resample_ohlcv, atr
-from bt_intrabar import resolve_first_touch_1m
+# Optional intrabar resolver (1m). We do not require 1m in FADER2; keep this optional.
+try:
+    from bt_intrabar import resolve_first_touch_1m  # type: ignore
+except Exception:
+    resolve_first_touch_1m = None  # type: ignore
+
 from shared_utils import load_parquet_data
 from fill_entry_quality_features import compute_entry_quality_panel
 
@@ -788,6 +793,9 @@ def _resolve_intrabar(symbol: str, bar_ts, levels: dict, bar_ohlc: dict):
     # Prefer 1m sequencing if configured
     tie = str(getattr(cfg, "TIE_BREAKER", "use_1m"))
     use_1m = bool(getattr(cfg, "USE_INTRABAR_1M", False))
+    if resolve_first_touch_1m is None:
+        raise RuntimeError("USE_INTRABAR_1M is enabled but bt_intrabar.resolve_first_touch_1m is unavailable")
+
     if tie == "use_1m" and use_1m:
         try:
             return resolve_first_touch_1m(symbol, bar_ts, inside)
