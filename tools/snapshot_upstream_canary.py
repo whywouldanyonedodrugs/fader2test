@@ -118,7 +118,7 @@ def main() -> int:
                 "sha256": _sha256_file(p),
             }
 
-    snap_path = results_dir / "BASELINE_UPSTREAM_CANARY.json"
+    snap_path = repo / "Docs" / "baselines" / "BASELINE_UPSTREAM_CANARY.json"
     snap_path.write_text(json.dumps(out, indent=2, sort_keys=True))
     print("Wrote:", snap_path)
     print("signals_rows:", out["signals"]["n_rows"], "signals_fp:", out["signals"]["fingerprint_sha256"])
