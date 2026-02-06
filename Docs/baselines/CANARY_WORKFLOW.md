@@ -120,3 +120,6 @@ If gate fails:
 - revert or fix until it passes, then commit.
 
 This prevents costly accidental drift.
+
+Process hardening:
+- Treat “local canary gate PASS + fingerprints/row counts pasted” as mandatory completion criteria for any patch.
