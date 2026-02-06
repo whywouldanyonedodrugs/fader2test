@@ -154,6 +154,12 @@ class SliceSpec:
 
 
 def _slice_one_file(in_path: Path, out_path: Path, symbol: str, spec: SliceSpec) -> Tuple[int, str]:
+
+
+    start_ts = pd.to_datetime(spec.start, utc=True) if getattr(spec, "start", None) else None
+    end_ts   = pd.to_datetime(spec.end, utc=True) if getattr(spec, "end", None) else None
+
+
     df = pd.read_parquet(in_path)
     ts_col = _detect_ts_col(df, spec.ts_col)
 
@@ -198,6 +204,27 @@ def _slice_one_file(in_path: Path, out_path: Path, symbol: str, spec: SliceSpec)
         if "timestamp" not in out_df.columns:
             if "ts_col" in locals() and ts_col in out_df.columns:
                 out_df = out_df.rename(columns={ts_col: "timestamp"})
+
+    # --- Enforce start/end window on normalized timestamps (after normalization, before write) ---
+    if start_ts is not None or end_ts is not None:
+        # Determine the timestamp series/index to filter on
+        if isinstance(df.index, pd.DatetimeIndex):
+            ts_f = df.index
+        elif "timestamp" in df.columns:
+            ts_f = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
+        else:
+            # fall back: if ts_col exists, try it
+            ts_f = pd.to_datetime(df[ts_col], utc=True, errors="coerce") if "ts_col" in locals() and ts_col in df.columns else None
+
+        if ts_f is not None:
+            m = pd.Series(True, index=df.index)
+            if start_ts is not None:
+                m &= (ts_f >= start_ts)
+            if end_ts is not None:
+                m &= (ts_f <= end_ts)
+            df = df.loc[m.values]
+
+
 
     out_df.to_parquet(out_path, index=False)
 
