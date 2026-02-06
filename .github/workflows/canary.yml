@@ -1,0 +1,41 @@
+name: FADER2 Parity Gate
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  parity-check:
+    runs-on: self-hosted
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Link Canary Data
+        # The runner checks out to a temp dir; we must link the server's data here
+        # so upstream_longonly/parquet (which points to ../data_canary) resolves.
+        run: |
+          if [ -d "/opt/fader2/data_canary" ]; then
+            echo "Linking /opt/fader2/data_canary to workspace..."
+            ln -sf /opt/fader2/data_canary data_canary
+          else
+            echo "ERROR: /opt/fader2/data_canary not found on runner machine."
+            exit 1
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: "pip"
+
+      - name: Install Dependencies
+        run: |
+          pip install -r upstream_longonly/requirements.txt
+          pip install -r shortonly/requirements.txt
+
+      - name: Run Canary Gates
+        # Runs the hardened script created in Ticket B
+        run: bash tools/canary_all.sh
