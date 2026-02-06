@@ -11,6 +11,13 @@
 cd /opt/fader2
 source .venv/bin/activate
 
+## 0.5) One-command canary (recommended)
+./tools/canary_all.sh
+# Rebuild data_canary from lake:
+./tools/canary_all.sh --regen
+# Skip baseline check (debug only):
+./tools/canary_all.sh --skip-baseline
+
 ## 1) Regenerate canary dataset (from lake)
 rm -rf data_canary
 python tools/make_canary_from_lake.py \

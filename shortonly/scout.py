@@ -441,13 +441,14 @@ def _optimize_signal_dtypes(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
     out = df.copy()
+    out["side"] = "short"
 
     # timestamps
     if "timestamp" in out.columns:
         out["timestamp"] = pd.to_datetime(out["timestamp"], utc=True, errors="coerce")
 
     # IMPORTANT: keep label-like columns as pandas 'string' (NOT 'category')
-    for col in ("symbol", "pullback_type", "entry_rule"):
+    for col in ("symbol", "pullback_type", "entry_rule", "side"):
         if col in out.columns:
             out[col] = out[col].astype("string")
 
@@ -1037,24 +1038,20 @@ def _eth_macd_hist_4h_to_5m() -> pd.Series:
 
 def detect_signals_for_symbol(sym: str, rs_table: Optional[pd.DataFrame]) -> pd.DataFrame:
     """
-    Donchian + pullback detector rewritten to mirror the live YAML logic more closely.
+    Boom/Stall/Trigger Short Detector (Phase 2 - Advanced).
 
-    Conditions (per-symbol, 5m bars):
-      - Daily Donchian breakout confirm: daily close > prior N-day high
-        using *daily* bars and using the last completed day as in live.
-      - Retest: within RETEST_LOOKBACK_BARS, some bar's [low, high] crosses
-        a band around the level [level*(1-eps), level*(1+eps)].
-      - Current close > level (same as live pullback op).
-      - Volume median multiple >= VOL_MULTIPLE (or quantile mode).
-      - RS percentile >= RS_MIN_PERCENTILE (if enabled).
-      - ATR is computed as in backtester cfg (for later use by meta model).
+    Logic:
+      1. Boom: 4h (48 bar) return > 1.5%.
+      2. Stall: Prior 1h (12 bars) range < 3.0 * ATR. (Excludes trigger bar)
+      3. Trigger: Either Stall Break or EMA Cross (configurable).
+      4. Optional Gate: Funding z-score above threshold (configurable).
     """
     df = load_parquet_data(
         sym,
         start_date=cfg.START_DATE,
         end_date=cfg.END_DATE,
         drop_last_partial=True,
-        columns=["open", "high", "low", "close", "volume"],
+        columns=["open", "high", "low", "close", "volume", "funding_rate", "open_interest"],
     )
     if df.empty:
         return pd.DataFrame(
@@ -1063,215 +1060,170 @@ def detect_signals_for_symbol(sym: str, rs_table: Optional[pd.DataFrame]) -> pd.
                 "symbol",
                 "entry",
                 "atr",
-                "don_break_len",
                 "don_break_level",
+                "side",
                 "pullback_type",
                 "entry_rule",
-                "vol_spike",
                 "rs_pct",
+                "funding_z",
             ]
         ).astype({"timestamp": "datetime64[ns, UTC]"})
 
-    df = _normalize_ts_index(df)
-    df = df.sort_index()
+    df = _normalize_ts_index(df).sort_index()
 
-    # --- ATR (same as before: higher TF ATR forward-filled to 5m) ---
-    tf = getattr(cfg, "ATR_TIMEFRAME", None)
-    if tf:
-        dft = resample_ohlcv(df, str(tf))
-        atr_tf = atr(dft, int(getattr(cfg, "ATR_LEN", 14)))
-        df["atr"] = atr_tf.reindex(df.index, method="ffill")
-    else:
-        df["atr"] = atr(df, int(getattr(cfg, "ATR_LEN", 14)))
+    # ATR for stall normalization
+    atr_len = int(getattr(cfg, "ATR_LEN", 14))
+    df["atr"] = atr(df, atr_len).ffill()
 
-    # --- Daily Donchian breakout level using *daily* bars ---
-    if cfg.DONCH_BASIS.lower() != "days":
-        raise ValueError("This detector expects DONCH_BASIS='days' to mirror live YAML logic.")
+    BOOM_WIN = int(getattr(cfg, "BOOM_WIN", 48))  # 4 hours (5m bars)
+    STALL_WIN = int(getattr(cfg, "STALL_WIN", 12))  # 1 hour (5m bars)
+    BOOM_THRESH = float(getattr(cfg, "BOOM_THRESH", 0.015))  # 1.5%
+    STALL_ATR_MAX = float(getattr(cfg, "STALL_ATR_MAX", 3.0))
 
-    don_n_days = int(cfg.DON_N_DAYS)
-
-    # Group 5m bars into calendar days and compute daily highs and closes
-    day_index = df.index.floor("D")
-    daily = (
-        df.assign(_day=day_index)
-        .groupby("_day")
-        .agg({"high": "max", "close": "last"})
-        .sort_index()
-    )
-
-    # Prior N-day rolling high, shifted by 1 day to avoid look-ahead,
-    # as in _op_donch_breakout_daily_confirm.
-    daily["donch_upper"] = daily["high"].rolling(don_n_days, min_periods=don_n_days).max().shift(1)
-
-    # Daily breakout flag: daily close > prior N-day high
-    daily["donch_break_ok"] = (daily["close"] > daily["donch_upper"]) & daily["donch_upper"].notna()
-
-    # In live, for any intraday 5m bar on day D, the breakout op sees the
-    # last *completed* 1d bar, i.e. day D-1 (because they drop the last
-    # partial 1d candle). We mirror this by shifting the daily breakout
-    # information forward by 1 day and joining on the 5m day index.
-    daily_effect = daily[["donch_upper", "donch_break_ok"]].copy()
-    daily_effect.index = daily_effect.index + pd.Timedelta(days=1)
-    daily_effect = daily_effect.rename(
-        columns={
-            "donch_upper": "donch_break_level",
-            "donch_break_ok": "donch_break_ok",
-        }
-    )
-
-    df = df.assign(day=day_index)
-    df = df.join(daily_effect, on="day")
-
-    # --- Volume spike: mirror volume_median_multiple op (using bars) ---
-    vol_mode = getattr(cfg, "VOL_SPIKE_MODE", "multiple")
-    vol_enabled = bool(getattr(cfg, "VOL_SPIKE_ENABLED", True))
-
-    # Estimate bars per day from the index spacing
-    if len(df) >= 2:
-        minutes = max(1, int((df.index[1] - df.index[0]).total_seconds() / 60.0))
-    else:
-        minutes = 5
-    bars_per_day = max(1, int(round(24 * 60 / minutes)))
-
-    vol_days = int(getattr(cfg, "VOL_LOOKBACK_DAYS", 30))
-    cap_bars = int(getattr(cfg, "VOL_CAP_BARS", 9000))
-
-    lookback = min(cap_bars, vol_days * bars_per_day)
-    if lookback <= 0:
-        lookback = bars_per_day  # fallback to ~1 day
-
-    if vol_enabled:
-        vol = df["volume"].astype(float)
-        vol_med = vol.rolling(
-            window=lookback,
-            min_periods=max(5, bars_per_day, lookback // 10),
-        ).median()
-        vol_med = vol_med.replace(0.0, np.nan)
-        vol_mult = vol / vol_med
-        if vol_mode == "multiple":
-            vol_thr = float(getattr(cfg, "VOL_MULTIPLE", 1.0))
-            vol_ok = vol_mult >= vol_thr
-        else:
-            q = float(getattr(cfg, "VOL_QUANTILE_Q", 0.90))
-            vol_q = vol.rolling(
-                window=lookback,
-                min_periods=max(5, bars_per_day),
-            ).quantile(q)
-            vol_ok = vol >= vol_q
-    else:
-        vol_mult = pd.Series(1.0, index=df.index)
-        vol_ok = pd.Series(True, index=df.index)
-
-    # --- Micro vol filter (ATR/price >= MICRO_VOL_MIN) ---
-    micro_min = float(getattr(cfg, "MICRO_VOL_MIN", 0.0))
-    if micro_min > 0.0:
-        micro_ratio = df["atr"].astype(float) / df["close"].astype(float)
-        micro_ok = micro_ratio >= micro_min
-    else:
-        micro_ok = pd.Series(True, index=df.index)
-
-    # --- Retest logic (pullback_retest_close_above_break) ---
-    eps = float(getattr(cfg, "RETEST_EPS_PCT", 0.0))
-    lb = int(getattr(cfg, "RETEST_LOOKBACK_BARS", 288))
-    N = len(df)
+    trigger_type = str(getattr(cfg, "TRIGGER_TYPE", "stall_break")).lower()
+    funding_gate_enabled = bool(getattr(cfg, "FUNDING_GATE_ENABLED", getattr(cfg, "USE_FUNDING_GATE", False)))
+    funding_z_thresh = float(getattr(cfg, "FUNDING_Z_THRESHOLD", getattr(cfg, "FUNDING_Z_MIN", 0.0)))
 
     close = df["close"].to_numpy(dtype=float)
     high = df["high"].to_numpy(dtype=float)
     low = df["low"].to_numpy(dtype=float)
-    level = df["donch_break_level"].to_numpy(dtype=float)
     atrv = df["atr"].to_numpy(dtype=float)
+    ts_idx = df.index
 
-    vol_ok_arr = vol_ok.to_numpy(dtype=bool)
-    micro_ok_arr = micro_ok.to_numpy(dtype=bool)
-    # daily breakout flag aligned to 5m bars
-    _break = df["donch_break_ok"]
-    _break_arr = _break.to_numpy()  # may contain True/False/NaN (object dtype)
-    break_ok_arr = np.where(pd.isna(_break_arr), False, _break_arr).astype(bool)
-    
-    rows = []
-    for i in range(N):
-        lev = level[i]
-        if not np.isfinite(lev):
+    # Funding z-score (24h window default; only used if funding_rate is available)
+    has_funding = "funding_rate" in df.columns
+    if has_funding:
+        fr = pd.to_numeric(df["funding_rate"], errors="coerce").ffill()
+        if fr.isna().all():
+            has_funding = False
+        else:
+            if len(df) >= 2:
+                minutes = max(1, int(round((df.index[1] - df.index[0]).total_seconds() / 60.0)))
+            else:
+                minutes = 5
+            bars_per_day = max(1, int(round(24 * 60 / minutes)))
+            win = int(getattr(cfg, "FUNDING_Z_WINDOW_BARS", bars_per_day))
+            minp = int(getattr(cfg, "FUNDING_Z_MIN_PERIODS", max(12, win // 4)))
+            mu = fr.rolling(window=win, min_periods=minp).mean()
+            sd = fr.rolling(window=win, min_periods=minp).std()
+            funding_z = (fr - mu) / (sd + 1e-9)
+            df["funding_z"] = funding_z.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    if "funding_z" not in df.columns:
+        df["funding_z"] = 0.0
+    fz = df["funding_z"].to_numpy(dtype=float)
+
+    # EMA trigger
+    ema_f = ema_s = None
+    if trigger_type == "ema_cross":
+        ema_fast_span = int(getattr(cfg, "TRIGGER_EMA_FAST", 9))
+        ema_slow_span = int(getattr(cfg, "TRIGGER_EMA_SLOW", 21))
+        ema_f = ema(df["close"].astype(float), ema_fast_span).to_numpy(dtype=float)
+        ema_s = ema(df["close"].astype(float), ema_slow_span).to_numpy(dtype=float)
+
+    signals = []
+    n = len(df)
+    i = BOOM_WIN + STALL_WIN
+
+    while i < n:
+        # Stall window is [i - STALL_WIN : i] (bars i-12 .. i-1)
+        stall_start = i - STALL_WIN
+        stall_end = i
+
+        boom_end_idx = stall_start
+        if boom_end_idx < BOOM_WIN:
+            i += 1
             continue
 
-        # Daily Donch breakout confirm: require breakout flag to be True,
-        # mirroring _op_donch_breakout_daily_confirm.
-        if not break_ok_arr[i]:
+        ret_4h = (close[boom_end_idx] / close[boom_end_idx - BOOM_WIN]) - 1.0
+        if not np.isfinite(ret_4h) or ret_4h < BOOM_THRESH:
+            i += 1
             continue
 
-        # Current close above level (same as live retest op)
-        if not (close[i] > lev):
+        stall_highs = high[stall_start:stall_end]
+        stall_lows = low[stall_start:stall_end]
+        if len(stall_highs) < STALL_WIN:
+            i += 1
             continue
 
-        # Volume / micro filters
-        if not vol_ok_arr[i]:
-            continue
-        if not micro_ok_arr[i]:
-            continue
+        s_max = float(np.max(stall_highs))
+        s_min = float(np.min(stall_lows))
+        rng = s_max - s_min
 
-        # Retest: any of last lb bars touches [lev*(1-eps), lev*(1+eps)]
-        start = max(0, i - lb + 1)
-        band_hi = lev * (1.0 + eps)
-        band_lo = lev * (1.0 - eps)
-
-        sub_low = low[start : i + 1]
-        sub_high = high[start : i + 1]
-        touched = bool(((sub_low <= band_hi) & (sub_high >= band_lo)).any())
-        if not touched:
+        ref_atr = atrv[boom_end_idx]
+        if not np.isfinite(ref_atr) or ref_atr <= 0:
+            i += 1
             continue
 
-        ts = df.index[i]
-
-        # --- RS gating: mirror universe_rs_pct_gte ---
-        rs_pct = None
-        if cfg.RS_ENABLED and rs_table is not None:
-            rs_pct = rs_lookup(rs_table, sym, ts)
-        min_rs = int(getattr(cfg, "RS_MIN_PERCENTILE", 0))
-        if min_rs > 0 and rs_pct is not None and rs_pct < min_rs:
-            # Below required RS percentile → skip, as live YAML would.
+        if (rng / ref_atr) > STALL_ATR_MAX:
+            i += 1
             continue
 
-        # --- Liquidity gating: mirror liquidity_median_24h_usd_gte ---
-        liq_min = float(getattr(cfg, "RS_LIQ_MIN_USD_24H", 0.0))
-        if rs_table is not None and liq_min > 0.0:
-            liq_usd = liq_lookup(rs_table, sym, ts)
-            if liq_usd is None or liq_usd < liq_min:
-                # Not liquid enough at this time → skip.
+        # Funding gate (optional; only enforce if funding data exists)
+        if funding_gate_enabled and has_funding:
+            if not np.isfinite(fz[i]) or fz[i] <= funding_z_thresh:
+                i += 1
                 continue
 
-        rows.append(
-            {
-                "timestamp": ts,
-                "symbol": sym,
-                "entry": float(close[i]),
-                "atr": float(atrv[i]) if np.isfinite(atrv[i]) else np.nan,
-                "don_break_len": don_n_days,
-                "don_break_level": float(lev),
-                "pullback_type": "retest",
-                "entry_rule": "donch_yaml_v1",
-                "vol_spike": bool(vol_ok_arr[i]),
-                "rs_pct": rs_pct,
-            }
-        )
+        # Trigger selection
+        triggered = False
+        if trigger_type == "ema_cross":
+            if ema_f is not None and ema_s is not None and i > 0:
+                if np.isfinite(ema_f[i]) and np.isfinite(ema_s[i]) and np.isfinite(ema_f[i - 1]) and np.isfinite(ema_s[i - 1]):
+                    if (ema_f[i] < ema_s[i]) and (ema_f[i - 1] >= ema_s[i - 1]):
+                        triggered = True
+        else:
+            # default: stall_break
+            if close[i] < s_min:
+                triggered = True
 
+        if triggered:
+            ts = ts_idx[i]
 
-    if not rows:
+            rs_pct = None
+            if cfg.RS_ENABLED and rs_table is not None:
+                rs_pct = rs_lookup(rs_table, sym, ts)
+                min_rs = int(getattr(cfg, "RS_MIN_PERCENTILE", 0))
+                if min_rs > 0 and rs_pct is not None and rs_pct < min_rs:
+                    i += 1
+                    continue
+
+            signals.append(
+                {
+                    "timestamp": ts,
+                    "symbol": sym,
+                    "entry": float(close[i]),
+                    "atr": float(atrv[i]) if np.isfinite(atrv[i]) else np.nan,
+                    "don_break_level": float(s_min),
+                    "side": "short",
+                    "pullback_type": "boom_stall",
+                    "entry_rule": ("ema_cross" if trigger_type == "ema_cross" else "stall_break"),
+                    "rs_pct": rs_pct,
+                    "funding_z": float(fz[i]),
+                }
+            )
+
+            # Cooldown: avoid clustered signals on the same drop
+            i += STALL_WIN
+        else:
+            i += 1
+
+    if not signals:
         return pd.DataFrame(
             columns=[
                 "timestamp",
                 "symbol",
                 "entry",
                 "atr",
-                "don_break_len",
                 "don_break_level",
+                "side",
                 "pullback_type",
                 "entry_rule",
-                "vol_spike",
                 "rs_pct",
+                "funding_z",
             ]
         ).astype({"timestamp": "datetime64[ns, UTC]"})
 
-    out = pd.DataFrame(rows).sort_values("timestamp").reset_index(drop=True)
+    out = pd.DataFrame(signals).sort_values("timestamp").reset_index(drop=True)
     out["timestamp"] = pd.to_datetime(out["timestamp"], utc=True)
     return out
 

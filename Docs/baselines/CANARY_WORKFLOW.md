@@ -1,4 +1,4 @@
-# Canary workflow (Phase-1 Completed)
+# Canary workflow (Phase-2 In Progress)
 
 ## Unified Gate
 The primary entry point for all safety checks is now:
@@ -9,6 +9,13 @@ This script automatically:
 1. Runs the Parity Check (Upstream vs Shortonly).
 2. Runs the Baseline Check (Upstream vs Committed JSON).
 3. Fails fast if any step errors.
+
+### Phase 2 note
+During Ticket 2.1 (short execution plumbing), we intentionally tag legacy signals as `side="short"`.
+Parity is expected to FAIL until the Boom/Stall/Trigger signals are implemented and a shortonly baseline is created.
+If parity is expected to fail, run the upstream baseline check directly to confirm stability:
+
+python tools/check_canary.py --mode baseline --target upstream --baseline Docs/baselines/BASELINE_UPSTREAM_CANARY.json
 
 ## CI / Automation
 - A self-hosted GitHub Actions runner is configured to run `tools/canary_all.sh` on every push to `main`.
@@ -33,7 +40,7 @@ python tools/make_canary_from_lake.py \
   --ts-unit auto
 
 ## Process for Phase 2 (Refactoring)
-When we begin changing `shortonly` logic:
+When we are changing `shortonly` logic:
 1. Run `tools/canary_all.sh` (Parity will fail as intended).
 2. Verify `upstream` baseline still passes (regression check).
 3. Create a NEW baseline for the new behavior:

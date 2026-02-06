@@ -1,44 +1,12 @@
 {
-  "repo": "/opt/fader2",
-  "results_dir": "/opt/fader2/reports/upstream_results",
-  "results_files": {
-    "equity.csv": {
-      "bytes": 2647,
-      "sha256": "2e0c427e17c37385b6f50045754faf6b7fe79cccba5552ff7cdc3266aafe3180"
-    },
-    "equity.parquet": {
-      "bytes": 3037,
-      "sha256": "1331307fd6b07e0798432464d7dfb9d0088a6c3594fbbb34036465ab796ff2be"
-    },
-    "lock_timeline.csv": {
-      "bytes": 55597,
-      "sha256": "34329c89a9bee1d73b3b811a1796473bc4862af9fa40b10370e4760bce211ae7"
-    },
-    "rs_weekly.parquet": {
-      "bytes": 21758,
-      "sha256": "9b58931c19ab0d6f2b661f75bd28e34eab70ee3381b371f1dfff01bd747e72be"
-    },
-    "trades.csv": {
-      "bytes": 67613,
-      "sha256": "76268ceb40d7221341dcaea3d6b3aa0cf56eca66e1f13cb44256889415fcd97e"
-    },
-    "trades.parquet": {
-      "bytes": 83010,
-      "sha256": "bfb11f08b633aed55ee3011e839f0f7a426e931caddcc8078f539284ddc8ef5d"
-    }
-  },
-  "signals": {
-    "fingerprint_sha256": "944598160459e0fe4cdf2d120225f04f5c0efd7b6c98b593d5a95de85d75eb21",
-    "n_rows": 457,
-    "ts_max": "2024-05-25 21:00:00+00:00",
-    "ts_min": "2024-02-09 01:50:00+00:00"
-  },
-  "signals_dir": "/opt/fader2/reports/upstream_signals",
-  "trades": {
-    "entry_max": "2024-05-25 00:00:00+00:00",
-    "entry_min": "2024-02-09 01:50:00+00:00",
-    "fingerprint_sha256": "a2f32856969049f7f6248ea6b2d29e0db85090141724e43b2c8564fbb49c9e6b",
-    "n_rows": 59,
-    "path": "/opt/fader2/reports/upstream_results/trades.parquet"
-  }
+  "equity_fp": "1331307fd6b07e0798432464d7dfb9d0088a6c3594fbbb34036465ab796ff2be",
+  "equity_rows": 59,
+  "lock_fp": "34329c89a9bee1d73b3b811a1796473bc4862af9fa40b10370e4760bce211ae7",
+  "lock_rows": 457,
+  "rs_fp": "065f596e9f0660bf1ba86d59e4496e794d3e1b8e661cc46acb57e1f81e1d3b1f",
+  "rs_rows": 1450,
+  "signals_fp": "0b8f9e555dd3b08d93356f82c1e5de85668c82b383aa35ab7e02ef3b54196cfb",
+  "signals_rows": 457,
+  "trades_fp": "bfb11f08b633aed55ee3011e839f0f7a426e931caddcc8078f539284ddc8ef5d",
+  "trades_rows": 59
 }

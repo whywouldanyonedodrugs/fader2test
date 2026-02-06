@@ -1058,6 +1058,192 @@ def _simulate_long_with_partials_trail(
     )
 
 
+def _simulate_short_with_partials_trail(
+    symbol: str,
+    entry_ts: pd.Timestamp,
+    entry_price: float,
+    atr_at_entry: float,
+    equity_at_entry: float,
+    df5: pd.DataFrame,
+    *,
+    risk_mode_override: str | None = None,
+    risk_pct_override: float | None = None,
+    fixed_cash_override: float | None = None,
+    avwap_anchor_ts: pd.Timestamp | None = None,
+    sl_mult_override: float | None = None,
+    tp_mult_override: float | None = None,
+    av_sl_mult_override: float | None = None,
+    av_tp_mult_override: float | None = None,
+) -> dict | None:
+    # --- config
+    fee_rate = float(getattr(cfg, "FEE_RATE", 0.00055))
+    time_hours = getattr(cfg, "TIME_EXIT_HOURS", None)
+
+    # Spread config
+    use_spread = getattr(cfg, "SIMULATE_SPREAD_ENABLED", False)
+    spread_pct = float(getattr(cfg, "SPREAD_PCT", 0.001)) if use_spread else 0.0
+
+    sl_mult = float(sl_mult_override if sl_mult_override is not None else getattr(cfg, "SL_ATR_MULT", 2.0))
+    tp_mult = float(tp_mult_override if tp_mult_override is not None else getattr(cfg, "TP_ATR_MULT", 8.0))
+
+    # partials / trail
+    partial_on = bool(getattr(cfg, "PARTIAL_TP_ENABLED", False))
+    tp1_mult = float(getattr(cfg, "PARTIAL_TP1_ATR_MULT", 5.0))
+    tp1_ratio = float(getattr(cfg, "PARTIAL_TP_RATIO", 0.5))
+    move_be = bool(getattr(cfg, "MOVE_SL_TO_BE_ON_TP1", True))
+
+    trail_on = bool(getattr(cfg, "TRAIL_AFTER_TP1", False))
+    trail_mult = float(getattr(cfg, "TRAIL_ATR_MULT", 1.0))
+    use_hwm = bool(getattr(cfg, "TRAIL_USE_HIGH_WATERMARK", True))
+
+    # --- Short levels (SL above, TP below)
+    sl_initial = entry_price + sl_mult * atr_at_entry
+    tp = entry_price - tp_mult * atr_at_entry
+    tp1 = (entry_price - tp1_mult * atr_at_entry) if partial_on else None
+    trail_gap = (trail_mult * atr_at_entry) if trail_on else None
+    sl_final = sl_initial
+
+    # --- size from risk
+    qty = _size_from_risk(
+        entry_price=entry_price,
+        sl_price=sl_initial,
+        equity=equity_at_entry,
+        risk_mode=risk_mode_override,
+        risk_pct=risk_pct_override,
+        fixed_cash=fixed_cash_override,
+        notional_cap_pct=getattr(cfg, "NOTIONAL_CAP_PCT_OF_EQUITY", 0.25),
+        max_leverage=getattr(cfg, "MAX_LEVERAGE", 10.0),
+    )
+    if qty <= 0:
+        return None
+
+    # --- Strict Entry Validation (Immediate Stop Check) ---
+    entry_bar = df5.loc[entry_ts]
+    check_high = float(entry_bar["high"]) * (1 + spread_pct / 2)
+
+    if check_high >= sl_initial:
+        fees = fee_rate * abs(qty * entry_price) * 2
+        exit_px = sl_initial
+        pnl_cash = qty * (entry_price - exit_px) - fees
+        return dict(
+            exit_ts=entry_ts,
+            exit_price=exit_px,
+            exit_reason="immediate_sl",
+            fees=fees,
+            qty_filled=qty,
+            pnl_cash=float(pnl_cash),
+            sl_initial=sl_initial,
+            sl_final=sl_final,
+            tp=tp,
+            mae_over_atr=0.0,
+            mfe_over_atr=0.0,
+        )
+
+    fees = fee_rate * abs(qty * entry_price)
+
+    # --- path after entry
+    walk = df5.loc[df5.index > entry_ts].copy()
+    if walk.empty:
+        return None
+
+    took_tp1 = False
+    remaining_qty = qty
+    lowest_since_tp1 = entry_price
+    curr_trail = None
+    tp1_fill_px: float | None = None
+
+    t_exit: pd.Timestamp | None = None
+    px_exit: float | None = None
+    reason: str | None = None
+
+    max_adv_px = entry_price
+    max_fav_px = entry_price
+
+    deadline = entry_ts + pd.Timedelta(hours=float(time_hours)) if time_hours is not None else None
+
+    for ts, row in walk.iterrows():
+        o, h, l, c = map(float, (row["open"], row["high"], row["low"], row["close"]))
+
+        # Simulate Bid/Ask for shorts (buy to cover at ask)
+        ask_high = h * (1 + spread_pct / 2)
+        ask_low = l * (1 + spread_pct / 2)
+
+        # excursions (approx)
+        max_adv_px = max(max_adv_px, ask_high)
+        max_fav_px = min(max_fav_px, ask_low)
+
+        if took_tp1 and trail_on:
+            lowest_since_tp1 = min(lowest_since_tp1, ask_low) if use_hwm else c
+            curr_trail = lowest_since_tp1 + trail_gap
+
+        levels = {"sl": sl_final, "tp": tp}
+        if (not took_tp1) and (tp1 is not None):
+            levels["tp1"] = tp1
+        if took_tp1 and (curr_trail is not None):
+            levels["trail"] = curr_trail
+
+        # Check SL (Ask High >= SL) -> buy to cover
+        if ask_high >= levels["sl"]:
+            t_exit, px_exit, reason = ts, levels["sl"], "sl"
+            break
+
+        # Check TP (Ask Low <= TP) -> buy to cover
+        if ask_low <= levels["tp"]:
+            t_exit, px_exit, reason = ts, levels["tp"], "tp_final"
+            break
+
+        # Check TP1
+        if "tp1" in levels and ask_low <= levels["tp1"]:
+            fill_px = float(levels["tp1"])
+            take_qty = remaining_qty * tp1_ratio
+            remaining_qty -= take_qty
+            fees += fee_rate * abs(take_qty * fill_px)
+            took_tp1 = True
+            tp1_fill_px = fill_px
+            lowest_since_tp1 = min(lowest_since_tp1, ask_low)
+            if move_be:
+                sl_final = entry_price
+            continue
+
+        # Check Trail (Ask High >= Trail)
+        if "trail" in levels and ask_high >= levels["trail"]:
+            t_exit, px_exit, reason = ts, levels["trail"], "trail"
+            break
+
+        # Time Exit
+        if deadline is not None and ts >= deadline:
+            t_exit, px_exit, reason = ts, c * (1 + spread_pct / 2), "time"
+            break
+
+    if t_exit is None:
+        last_ts = walk.index[-1]
+        t_exit, px_exit, reason = last_ts, float(walk.iloc[-1]["close"]) * (1 + spread_pct / 2), "time"
+
+    fees += fee_rate * abs(remaining_qty * px_exit)
+    pnl_cash = remaining_qty * (entry_price - px_exit)
+    if took_tp1 and tp1_fill_px is not None:
+        realized_qty = qty * tp1_ratio
+        pnl_cash += realized_qty * (entry_price - tp1_fill_px)
+    pnl_cash -= fees
+
+    mae_over_atr = (max_adv_px - entry_price) / atr_at_entry if atr_at_entry > 0 else np.nan
+    mfe_over_atr = (entry_price - max_fav_px) / atr_at_entry if atr_at_entry > 0 else np.nan
+
+    return dict(
+        exit_ts=t_exit,
+        exit_price=px_exit,
+        exit_reason=reason,
+        fees=fees,
+        qty_filled=qty,
+        pnl_cash=float(pnl_cash),
+        sl_initial=sl_initial,
+        sl_final=sl_final,
+        tp=tp,
+        mae_over_atr=mae_over_atr,
+        mfe_over_atr=mfe_over_atr,
+    )
+
+
 # ---------------- Engine ----------------
 class Backtester:
 
@@ -2655,22 +2841,41 @@ class Backtester:
                     # entry anchor
                     anchor_ts = ts
 
-            sim = _simulate_long_with_partials_trail(
-                symbol=sym,
-                entry_ts=ts,
-                entry_price=entry_price,
-                atr_at_entry=atr_now,
-                equity_at_entry=equity_at_entry,
-                df5=df5,
-                risk_mode_override=risk_mode_cfg,
-                risk_pct_override=risk_pct_override,
-                fixed_cash_override=fixed_cash_override,
-                avwap_anchor_ts=anchor_ts,
-                sl_mult_override=sl_override,
-                tp_mult_override=tp_override,
-                av_sl_mult_override=av_sl_override,
-                av_tp_mult_override=av_tp_override,
-            )
+            trade_side = str(s.get("side", "long")).lower()
+            if trade_side == "short":
+                sim = _simulate_short_with_partials_trail(
+                    symbol=sym,
+                    entry_ts=ts,
+                    entry_price=entry_price,
+                    atr_at_entry=atr_now,
+                    equity_at_entry=equity_at_entry,
+                    df5=df5,
+                    risk_mode_override=risk_mode_cfg,
+                    risk_pct_override=risk_pct_override,
+                    fixed_cash_override=fixed_cash_override,
+                    avwap_anchor_ts=anchor_ts,
+                    sl_mult_override=sl_override,
+                    tp_mult_override=tp_override,
+                    av_sl_mult_override=av_sl_override,
+                    av_tp_mult_override=av_tp_override,
+                )
+            else:
+                sim = _simulate_long_with_partials_trail(
+                    symbol=sym,
+                    entry_ts=ts,
+                    entry_price=entry_price,
+                    atr_at_entry=atr_now,
+                    equity_at_entry=equity_at_entry,
+                    df5=df5,
+                    risk_mode_override=risk_mode_cfg,
+                    risk_pct_override=risk_pct_override,
+                    fixed_cash_override=fixed_cash_override,
+                    avwap_anchor_ts=anchor_ts,
+                    sl_mult_override=sl_override,
+                    tp_mult_override=tp_override,
+                    av_sl_mult_override=av_sl_override,
+                    av_tp_mult_override=av_tp_override,
+                )
             if sim is None:
                 self._log_decision(
                     symbol=sym,
@@ -2695,7 +2900,7 @@ class Backtester:
             sl = sl_final  # what ends up on the book when we exit
 
             # --- R based on *initial* stop distance (stable even if SL moved to BE)
-            risk_per_unit = max(entry_price - sl_init, 1e-12)
+            risk_per_unit = max(abs(entry_price - sl_init), 1e-12)
             risk_notional = risk_per_unit * qty
             pnl_R = (pnl / risk_notional) if risk_notional > 0 else np.nan
 
@@ -2758,7 +2963,7 @@ class Backtester:
                 entry=entry_price,
                 exit=exit_price,
                 qty=qty,
-                side="long",
+                side=trade_side,
                 sl=sl,
                 tp=tp,
                 exit_reason=exit_reason,

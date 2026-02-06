@@ -12,13 +12,13 @@
 - Diagnose first; no guessing. If a claim depends on code, inspect exact lines and quote them.
 - All code edits must be anchored (search string + exact replacement block + surrounding context).
 - Keep one canonical implementation; remove or quarantine dead paths once confirmed unused.
-- Human operator runs commands on `/opt/fader2` and supplies outputs/logs.
+- Human operator runs commands on `/opt/fader2` and supplies outputs/logs, but you can run tests too.
 - Local canary gate required: Codex must not deliver a patch as “done” unless the operator has run the
   required canary gate locally and the PASS output (plus fingerprints/row counts) is included.
 
 ## Roles
 - Supervisor (ChatGPT): plans changes, demands evidence, enforces parity gate.
-- Implementer (Codex): makes the smallest possible code edits, runs the canary loop, reports diffs.
+- Implementer (Codex): makes the smallest possible code edits, runs the canary loop, reports diffs, runs tests if needed.
 - Operator (human): executes commands, copies outputs back into chat.
 
 ## Standard change loop

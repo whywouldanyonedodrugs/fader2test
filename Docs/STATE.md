@@ -4,8 +4,8 @@ Repo: whywouldanyonedodrugs/fader2test
 Working dir (machine): /opt/fader2
 
 ## Phase
-Phase 1 Complete (Workflow Hardening + CI).
-Ready for Phase 2: Short-Only Logic Refactor.
+Phase 2 In Progress (Short-Only Refactor).
+Ticket 2.1 complete: short execution engine enabled; signals temporarily tagged `side="short"` for plumbing verification.
 
 ## Non-negotiables
 - No-guessing policy: if a fact/semantics is unknown, stop and require the source (code/docs/output).
@@ -28,13 +28,13 @@ Runners:
   - signals_rows=457, trades_rows=59 (primary anchor)
 
 ## Current status
-- Parity: OK (Upstream == Shortonly)
-- Baseline: OK (Matches committed JSON)
+- Parity: Expected FAIL (short engine enabled; legacy signals are tagged short for testing)
+- Baseline: Upstream still the reference; run baseline check directly when parity is expected to fail
 - CI: Configured on self-hosted runner (.github/workflows/canary.yml)
 
 ## Next Tickets (Phase 2)
-1) Refactor Short-Only: Begin divergence of `shortonly/` logic while keeping upstream frozen.
-   - Requires new baseline generation for shortonly specific behavior.
+1) Ticket 2.2: Delete Donchian logic and implement Boom/Stall/Trigger signal generation.
+2) Create a new shortonly baseline once the new strategy is intentional and stable.
 
 ## How to run the gate (local)
 bash tools/canary_all.sh

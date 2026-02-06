@@ -1,0 +1,12 @@
+{
+  "equity_fp": "f85944981c3a0f58a4f12d7ddc405b3b527a6d1f836883e4279fd05ea93a7be6",
+  "equity_rows": 187,
+  "lock_fp": "2938453a18124153f91150e201c7034448cae5cded71005f972c38dff5651303",
+  "lock_rows": 445,
+  "rs_fp": "065f596e9f0660bf1ba86d59e4496e794d3e1b8e661cc46acb57e1f81e1d3b1f",
+  "rs_rows": 1450,
+  "signals_fp": "b97c9315b82295373513fb476f5fd9c110dcd2e0131f92505e0142d0a66d4852",
+  "signals_rows": 574,
+  "trades_fp": "29f589a9d766f2a3e66e3b9ca32ec358c04bfd0d62cf396ccf7d62b4a586c866",
+  "trades_rows": 187
+}

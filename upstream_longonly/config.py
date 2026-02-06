@@ -10,7 +10,14 @@ PARQUET_1M_DIR = PROJECT_ROOT / "parquet_1m"  # optional 1m intrabar
 SIGNALS_DIR = PROJECT_ROOT / "signals"
 RESULTS_DIR = PROJECT_ROOT / "results"
 SYMBOLS_FILE = PROJECT_ROOT / "symbols.txt"
-for p in (PARQUET_DIR, PARQUET_1M_DIR, SIGNALS_DIR, RESULTS_DIR): p.mkdir(parents=True, exist_ok=True)
+for p in (PARQUET_DIR, PARQUET_1M_DIR, SIGNALS_DIR, RESULTS_DIR):
+    # Some paths are symlinks (e.g. results -> ../reports/upstream_results).
+    # mkdir() on a symlink raises FileExistsError, so instead ensure the symlink target exists.
+    if p.is_symlink():
+        target = p.resolve(strict=False)
+        target.mkdir(parents=True, exist_ok=True)
+        continue
+    p.mkdir(parents=True, exist_ok=True)
 
 # --- Execution window
 START_DATE: str | None = "2023-01-01"

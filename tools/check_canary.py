@@ -54,28 +54,42 @@ def _count_rows_csv(path: Path) -> int:
     return n
 
 
+def _hash_dataframe_rowset(df: "pd.DataFrame") -> str:
+    import pandas as pd  # type: ignore
+    if df is None:
+        df = pd.DataFrame()
+    cols = sorted(df.columns)
+    df2 = df[cols]
+    row_hash = pd.util.hash_pandas_object(df2, index=False).to_numpy(dtype="uint64")
+    row_hash.sort()
+    h = hashlib.sha256(row_hash.tobytes())
+    return h.hexdigest()
+
+
 def _hash_parquet_dir(dir_path: Path) -> Tuple[int, str]:
     """
-    Deterministic directory fingerprint:
-    - sum row counts across *.parquet
-    - sha256 over (relative_path + file_sha256) in sorted order
+    Order-insensitive row-set fingerprint for a parquet directory:
+    - load all parquet parts into a DataFrame
+    - canonicalize column order
+    - hash the sorted row-hash vector
     """
-    files = sorted(p for p in dir_path.rglob("*.parquet") if p.is_file())
-    h = hashlib.sha256()
-    rows = 0
-    for p in files:
-        rel = p.relative_to(dir_path).as_posix()
-        fh = _sha256_file(p)
-        try:
-            rows += _count_rows_parquet(p)
-        except Exception:
-            # If unreadable, treat as 0 rows but still hash bytes
-            pass
-        h.update(rel.encode("utf-8"))
-        h.update(b"\0")
-        h.update(fh.encode("utf-8"))
-        h.update(b"\n")
-    return rows, h.hexdigest()
+    import pandas as pd  # type: ignore
+    parts = sorted(p for p in dir_path.rglob("*.parquet") if p.is_file())
+    if not parts:
+        df = pd.DataFrame()
+    else:
+        dfs = [pd.read_parquet(p) for p in parts]
+        df = pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
+    rows = int(len(df))
+    return rows, _hash_dataframe_rowset(df)
+
+
+def _hash_parquet_file_rowset(path: Path) -> Tuple[int, Optional[str]]:
+    if not path.exists():
+        return 0, None
+    import pandas as pd  # type: ignore
+    df = pd.read_parquet(path)
+    return int(len(df)), _hash_dataframe_rowset(df)
 
 
 def _hash_optional_file(path: Path, kind: str) -> Tuple[int, Optional[str]]:
@@ -133,7 +147,7 @@ def snapshot_outputs(signals_dir: Path, results_dir: Path) -> Snapshot:
 
     trades_rows, trades_fp = _hash_optional_file(results_dir / "trades.parquet", "parquet")
     equity_rows, equity_fp = _hash_optional_file(results_dir / "equity.parquet", "parquet")
-    rs_rows, rs_fp = _hash_optional_file(results_dir / "rs_weekly.parquet", "parquet")
+    rs_rows, rs_fp = _hash_parquet_file_rowset(results_dir / "rs_weekly.parquet")
 
     # lock_timeline is csv in your current upstream
     lock_rows, lock_fp = _hash_optional_file(results_dir / "lock_timeline.csv", "csv")
