@@ -172,8 +172,35 @@ def _slice_one_file(in_path: Path, out_path: Path, symbol: str, spec: SliceSpec)
     mask = (ts >= spec.start) & (ts < spec.end)
     out_df = df.loc[mask].copy()
 
+    # --- Output normalization: ensure a physical timestamp column for downstream compatibility ---
+    if isinstance(df.index, pd.DatetimeIndex):
+        # Make sure the index is named 'timestamp' so reset_index produces the right column
+        if (df.index.name or "") != "timestamp":
+            df = df.copy()
+            df.index = df.index.rename("timestamp")
+        df = df.reset_index()
+    else:
+        # If timestamps were in a column but not named timestamp, standardize it
+        if "timestamp" not in df.columns:
+            # best-effort: if ts_col exists and is not timestamp, rename it
+            if "ts_col" in locals() and ts_col in df.columns:
+                df = df.rename(columns={ts_col: "timestamp"})
+
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    # --- Ensure output has a physical timestamp column (required by upstream schema validators) ---
+    out_df = df.copy()
+    if isinstance(out_df.index, pd.DatetimeIndex):
+        # Put timestamp into a real column, then drop index
+        out_df.insert(0, "timestamp", out_df.index)
+        out_df.reset_index(drop=True, inplace=True)
+    else:
+        # If timestamps live in a column, standardize its name
+        if "timestamp" not in out_df.columns:
+            if "ts_col" in locals() and ts_col in out_df.columns:
+                out_df = out_df.rename(columns={ts_col: "timestamp"})
+
     out_df.to_parquet(out_path, index=False)
+
 
     digest = _sha256_file(out_path)
     return int(len(out_df)), digest
