@@ -34,3 +34,9 @@ python tools/run_shortonly_canary.py
 
 ## 5) Compare
 python tools/compare_upstream_shortonly_canary.py
+
+## 6) Gate (REQUIRED before PR/merge)
+# Phase-0 parity (current):
+python tools/check_canary.py --mode parity
+# If/when Phase-1 baseline mode is enabled for shortonly:
+# python tools/check_canary.py --mode baseline --target shortonly --baseline Docs/baselines/BASELINE_SHORTONLY_CANARY.json

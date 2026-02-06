@@ -24,3 +24,7 @@ A change is acceptable only if:
 - Do not change upstream to “make it pass” unless fixing a proven bug that exists in upstream itself.
 - Diagnose by diffing: signals rows/fp → trades rows/fp → equity fp → RS fp → lock fp.
 - Any fix must be minimal, anchored, and verified by rerunning the canary.
+
+## Local gate requirement (process rule)
+- The acceptance evidence must come from a local run on the data machine (where data_canary exists).
+- CI (including a self-hosted runner) may mirror the same checks, but does not waive the local gate requirement.

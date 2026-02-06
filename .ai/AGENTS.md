@@ -13,6 +13,8 @@
 - All code edits must be anchored (search string + exact replacement block + surrounding context).
 - Keep one canonical implementation; remove or quarantine dead paths once confirmed unused.
 - Human operator runs commands on `/opt/fader2` and supplies outputs/logs.
+- Local canary gate required: Codex must not deliver a patch as “done” unless the operator has run the
+  required canary gate locally and the PASS output (plus fingerprints/row counts) is included.
 
 ## Roles
 - Supervisor (ChatGPT): plans changes, demands evidence, enforces parity gate.
@@ -38,3 +40,7 @@
 You are editing `/opt/fader2`. Only touch `shortonly/` and `tools/` unless explicitly told otherwise.
 Before editing, locate and quote the exact code lines to be changed.
 After editing, run the canary loop in `.ai/COMMANDS.md` and report fingerprints.
+
+Role boundary (enforced):
+- Supervisor produces: ticket + acceptance + allowed files + gate mode/baseline + any “upstream off-limits” constraints.
+- Codex produces: minimal patch + exact command transcript + gate PASS evidence.

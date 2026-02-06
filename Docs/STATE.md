@@ -10,6 +10,9 @@ Workflow + canary harness complete. Upstream snapshot frozen; shortonly bootstra
 - No-guessing policy: if a fact/semantics is unknown, stop and require the source (code/docs/output).
 - Upstream parity is sacred: upstream_longonly behavior must not change after baseline is recorded.
 - No 1m intrabar data: intrabar modules must be optional; USE_INTRABAR_1M=False.
+ - Local canary gate required: no PR/merge is acceptable unless the operator runs the canary gate locally
+   on the data machine and shares the gate output (and fingerprints/row counts). CI, if added, is optional
+   and does not replace the local gate.
 
 ## Canary definition
 Dataset:
@@ -38,11 +41,17 @@ Gate:
 ## Next 3 tickets
 1) Commit Docs/STATE.md (this file) and keep it updated on every meaningful merge.
 2) Decide execution model:
-   - Supervisor chat defines tickets + acceptance.
-   - Codex executes edits + runs local canary + updates STATE.md.
+   - Supervisor (ChatGPT): writes a change ticket with (i) exact files allowed to change, (ii) explicit acceptance
+     gate (which check_canary mode + which baseline), (iii) explicit “do not modify upstream_longonly logic” unless stated.
+   - Codex (implementer): makes the smallest possible edits within the allowed files, and MUST provide:
+       * a git diff (or exact patches),
+       * the exact local commands run,
+       * the canary gate output (PASS) + fingerprints/row counts,
+       * and any STATE.md updates required by the ticket.
 3) Decide CI approach:
    - Local-only canary gate (default), OR
    - Self-hosted GitHub Actions runner to execute canaries on the data machine.
+   Note: CI must run the same gate (tools/check_canary.py) against the same committed baseline(s).
 
 ## How to run the gate (local)
 python tools/run_upstream_canary.py
