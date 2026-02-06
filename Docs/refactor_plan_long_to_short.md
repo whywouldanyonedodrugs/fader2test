@@ -1,35 +1,29 @@
-# Refactor plan: long-only upstream -> short-only FADER2
+Roadmap to use in the “project supervisor” chat (no new files required)
 
-## Constraints
-- Upstream code is imported and frozen under upstream_longonly/.
-- Refactor must be proven safe via characterization parity before any short-only behavior is introduced.
-- Meta-model gating/sizing must remain mechanically faithful (offline merge + online scoring).
+Phase 0 (done): Repo harness
 
-## Plan (stages)
-Stage 0: Import upstream + restore missing modules
-- Ensure shared_utils.load_parquet_data exists in upstream snapshot.
-- Ensure bt_intrabar exists if intrabar is enabled.
+Upstream snapshot imported.
 
-Stage 1: Baseline lock
-- Create canary dataset.
-- Define canonical upstream canary run command.
-- Save golden artifacts + hashes.
+Canary generator works and produces timestamp column.
 
-Stage 2: Refactor scaffold in fader2/
-- Create package skeleton: loader, strategy, simulator, meta, regimes, reporting.
-- Implement long-compat mode (for parity testing only).
-- Produce identical outputs to upstream on canary.
+Upstream and shortonly canary match exactly.
 
-Stage 3: Short-only implementation
-- Implement lower Donch + retest-from-below signal logic.
-- Implement short simulator with correct SL/TP touch semantics and slippage conventions.
-- Define short-only contracts in Docs/short_only_spec.md.
+Compare + snapshot tools exist.
 
-Stage 4: Bear meta-model
-- Train/export new meta bundle with its own feature_manifest.json.
-- Ensure no long-signed feature name reuse with inverted semantics.
-- Add regression tests for offline meta merge vs online scoring parity.
+Phase 1: Workflow automation and safety rails (next)
 
-Stage 5: Cleanup
-- Remove long-compat mode if desired.
-- Keep one canonical implementation path.
+Commit baseline JSON under Docs/baselines/.
+
+Add a single “one-command” runner (optional): tools/canary_all.sh (generates canary → upstream run → shortonly run → compare).
+
+Add “stop-the-line” policy: any mismatch blocks merges.
+
+Phase 2: Begin short-only refactor (later)
+
+Make side first-class in signals and trades.
+
+Implement short simulator (do not hack by negating prices).
+
+Define short regime gating (risk-off logic), replacing any unsafe lookahead regime.
+
+Meta-model: new feature manifest for short; avoid reusing long feature names with inverted meaning.

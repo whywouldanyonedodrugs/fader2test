@@ -1,59 +1,40 @@
-# FADER2 agent operating rules (mandatory)
+# Agents & supervisor operating procedure
+## “Start here” reading list for any new chat/agent
+- Docs/STATE.md
+- Docs/baselines/CANARY_WORKFLOW.md
+- .ai/PARITY.md
+- .ai/COMMANDS.md
+- Docs/short_only_spec.md
 
-This repo is building a SHORT-ONLY backtester by refactoring/porting a proven LONG-ONLY system.
-The long-only code does NOT originate in this repo. It will be imported as an upstream snapshot and treated as reference truth.
 
-## Authoritative truth
-1) Project files in the ChatGPT Project are authoritative and represent the repo state after git pull.
-2) For any statement about code behavior: inspect the exact file section and cite the exact lines/behavior.
-3) Do not infer implementation details from the manual when code is available; use the manual as contract/spec only.
 
-## Non-negotiable hard rules
-- Diagnose first; no guessing.
-- When proposing code changes: provide explicit, anchored edit instructions:
-  - what to search for
-  - the exact block to find (include surrounding context that uniquely identifies it)
-  - the exact replacement text
-- Keep the codebase clean: avoid parallel implementations. Prefer one canonical implementation per feature family.
-- You cannot run services here. The operator runs commands on `/opt/fader2` and provides logs/outputs.
+## Non-negotiable rules
+- Diagnose first; no guessing. If a claim depends on code, inspect exact lines and quote them.
+- All code edits must be anchored (search string + exact replacement block + surrounding context).
+- Keep one canonical implementation; remove or quarantine dead paths once confirmed unused.
+- Human operator runs commands on `/opt/fader2` and supplies outputs/logs.
 
-## Refactor protocol (required)
-We follow a two-track approach:
+## Roles
+- Supervisor (ChatGPT): plans changes, demands evidence, enforces parity gate.
+- Implementer (Codex): makes the smallest possible code edits, runs the canary loop, reports diffs.
+- Operator (human): executes commands, copies outputs back into chat.
 
-Track A — Upstream baseline (read-only)
-- Import the long-only modules into `upstream_longonly/` and DO NOT EDIT THEM.
-- Any changes to long-only behavior must be done in the refactored code, never by changing upstream.
+## Standard change loop
+1) Read the relevant code sections (quote lines).
+2) Propose minimal change + exact edit instructions.
+3) Implement in `shortonly/` (not upstream) unless fixing an upstream bug required for reference to run.
+4) Run:
+   - upstream canary
+   - shortonly canary
+   - compare script
+5) If mismatch: locate first divergence layer (signals → trades → equity).
 
-Track B — Refactored short-only code
-- Implement the refactor in `fader2/`.
-- Early phases may run in "long-compat mode" ONLY to verify parity with upstream.
-- Final target is short-only; once short-only is implemented, long-compat mode can be removed if desired.
+## What not to do
+- Don’t “fix” parity by loosening compare tolerances.
+- Don’t change canary window/symbols without updating the baseline contract.
+- Don’t commit `reports/` or `data_canary/`.
 
-## Regression gates (must exist before “refactor” claims)
-Tier A: unit/invariant tests (no parquet lake).
-Tier B: canary backtest regression (uses `data_canary/`).
-Tier C: full-lake runs (server-only).
-
-## Definition of Done (per task / PR)
-A task is done only when all of these are true:
-1) Diagnosis cites exact code lines (file + function + relevant snippet).
-2) Minimal patch is produced (smallest change satisfying acceptance).
-3) Operator commands are listed and executed:
-   - Tier A: <command>
-   - Tier B: <command>
-4) Outputs are attached (logs + key artifacts).
-5) Rollback is documented (revert commit or feature flag).
-
-## Evidence pack (what operator pastes back on failure)
-- exact command line
-- full error output/trace
-- `git status`
-- `git diff` (changed files only)
-- path to produced artifacts under `reports/...`
-
-## Live-feasibility constraints (always keep in mind)
-Even though we are backtester-focused, short-only logic must be live-feasible:
-- no lookahead
-- strict timestamp semantics (decision ts vs bar ts)
-- bounded compute per step
-- feature availability at runtime (especially meta-model features)
+## Codex prompt template (implementer)
+You are editing `/opt/fader2`. Only touch `shortonly/` and `tools/` unless explicitly told otherwise.
+Before editing, locate and quote the exact code lines to be changed.
+After editing, run the canary loop in `.ai/COMMANDS.md` and report fingerprints.

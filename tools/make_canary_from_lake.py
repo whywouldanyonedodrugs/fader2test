@@ -29,6 +29,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Optional, Tuple
 
+import numpy as np
 import pandas as pd
 
 
@@ -56,38 +57,39 @@ def _sha256_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
     return h.hexdigest()
 
 
-def _detect_ts_col(df, ts_col: str | None) -> str:
+def _detect_ts_col(df: pd.DataFrame, ts_col: Optional[str]) -> str:
     """
-    Determine where timestamps live.
     Returns:
-      - a column name, OR
-      - the special token "index" meaning: use df.index
+      - "__index__" if we should use a DatetimeIndex as the timestamp source
+      - else returns the column name to use as timestamp source
     """
+    # Explicit override: allow forcing index usage
+    if ts_col in ("__index__", "index"):
+        if not isinstance(df.index, pd.DatetimeIndex):
+            raise ValueError("--ts-col index requested but df.index is not a DatetimeIndex")
+        return "__index__"
 
-    # Explicit override
-    if ts_col is not None:
-        if ts_col.lower() == "index":
-            if isinstance(df.index, pd.DatetimeIndex):
-                return "index"
-            raise ValueError(f"--ts-col index requested but df.index is not a DatetimeIndex (got {type(df.index)})")
-        if ts_col in df.columns:
-            return ts_col
-        raise ValueError(f"--ts-col {ts_col!r} not found. Columns={list(df.columns)} index={type(df.index)}")
+    # Explicit column
+    if ts_col:
+        if ts_col not in df.columns:
+            raise ValueError(f"--ts-col {ts_col!r} not found in columns={list(df.columns)}")
+        return ts_col
 
-    # Auto-detect: prefer datetime index if present
+    # Auto: prefer DatetimeIndex if present
     if isinstance(df.index, pd.DatetimeIndex):
-        return "index"
+        return "__index__"
 
-    # Auto-detect: look for common timestamp column names
-    candidates = ("timestamp", "ts", "time", "datetime", "open_time", "close_time", "__index_level_0__", "index")
-    for c in candidates:
-        if c in df.columns:
-            return c
+    # Else: detect from columns
+    cols_l = {c.lower(): c for c in df.columns}
+    for cand in TS_CANDIDATES:
+        if cand in cols_l:
+            return cols_l[cand]
 
     raise ValueError(
-        "Could not detect timestamp column. Provide --ts-col. "
-        f"Looked for {candidates}. Columns={list(df.columns)} index={type(df.index)}"
+        f"Could not detect timestamp column/index. Provide --ts-col. "
+        f"Looked for {TS_CANDIDATES} in columns and also DatetimeIndex. Columns={list(df.columns)}"
     )
+
 
 
 def _normalize_ts_series(s: pd.Series, ts_unit: str) -> pd.DatetimeIndex:
@@ -152,85 +154,41 @@ class SliceSpec:
     ts_col: Optional[str]
     ts_unit: str
 
-
 def _slice_one_file(in_path: Path, out_path: Path, symbol: str, spec: SliceSpec) -> Tuple[int, str]:
-
-
-    start_ts = pd.to_datetime(spec.start, utc=True) if getattr(spec, "start", None) else None
-    end_ts   = pd.to_datetime(spec.end, utc=True) if getattr(spec, "end", None) else None
-
-
     df = pd.read_parquet(in_path)
-    ts_col = _detect_ts_col(df, spec.ts_col)
 
-    # ts_col may be a real column name or the special token "index"
-    ts_src = df.index if ts_col == "index" else df[ts_col]
-    ts = _normalize_ts_series(ts_src, spec.ts_unit)
+    ts_src = _detect_ts_col(df, spec.ts_col)
 
-    # Apply normalized timestamps back onto df so downstream logic is consistent
-    df = df.copy()
-    if ts_col == "index":
-        df.index = pd.DatetimeIndex(ts, name=df.index.name or "timestamp")
+    if ts_src == "__index__":
+        ts_idx = df.index
+        if ts_idx.tz is None:
+            ts_idx = ts_idx.tz_localize("UTC")
+        else:
+            ts_idx = ts_idx.tz_convert("UTC")
+        ts_idx = pd.DatetimeIndex(ts_idx)
     else:
-        df[ts_col] = ts
+        ts_norm = _normalize_ts_series(df[ts_src], spec.ts_unit)
+        ts_idx = pd.DatetimeIndex(pd.to_datetime(ts_norm, utc=True, errors="raise"))
 
+    mask = np.asarray((ts_idx >= spec.start) & (ts_idx < spec.end), dtype=bool)
 
-    mask = (ts >= spec.start) & (ts < spec.end)
-    out_df = df.loc[mask].copy()
+    # Positional boolean slicing avoids any index-alignment surprises
+    out_df = df.iloc[mask].copy().reset_index(drop=True)
 
-    # --- Output normalization: ensure a physical timestamp column for downstream compatibility ---
-    if isinstance(df.index, pd.DatetimeIndex):
-        # Make sure the index is named 'timestamp' so reset_index produces the right column
-        if (df.index.name or "") != "timestamp":
-            df = df.copy()
-            df.index = df.index.rename("timestamp")
-        df = df.reset_index()
-    else:
-        # If timestamps were in a column but not named timestamp, standardize it
-        if "timestamp" not in df.columns:
-            # best-effort: if ts_col exists and is not timestamp, rename it
-            if "ts_col" in locals() and ts_col in df.columns:
-                df = df.rename(columns={ts_col: "timestamp"})
+    # Always write canonical timestamp column (required by upstream schema checks)
+    out_ts = pd.Series(ts_idx[mask]).reset_index(drop=True)
+    out_df["timestamp"] = out_ts
+
+    # Put timestamp first
+    cols = ["timestamp"] + [c for c in out_df.columns if c != "timestamp"]
+    out_df = out_df[cols]
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    # --- Ensure output has a physical timestamp column (required by upstream schema validators) ---
-    out_df = df.copy()
-    if isinstance(out_df.index, pd.DatetimeIndex):
-        # Put timestamp into a real column, then drop index
-        out_df.insert(0, "timestamp", out_df.index)
-        out_df.reset_index(drop=True, inplace=True)
-    else:
-        # If timestamps live in a column, standardize its name
-        if "timestamp" not in out_df.columns:
-            if "ts_col" in locals() and ts_col in out_df.columns:
-                out_df = out_df.rename(columns={ts_col: "timestamp"})
-
-    # --- Enforce start/end window on normalized timestamps (after normalization, before write) ---
-    if start_ts is not None or end_ts is not None:
-        # Determine the timestamp series/index to filter on
-        if isinstance(df.index, pd.DatetimeIndex):
-            ts_f = df.index
-        elif "timestamp" in df.columns:
-            ts_f = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
-        else:
-            # fall back: if ts_col exists, try it
-            ts_f = pd.to_datetime(df[ts_col], utc=True, errors="coerce") if "ts_col" in locals() and ts_col in df.columns else None
-
-        if ts_f is not None:
-            m = pd.Series(True, index=df.index)
-            if start_ts is not None:
-                m &= (ts_f >= start_ts)
-            if end_ts is not None:
-                m &= (ts_f <= end_ts)
-            df = df.loc[m.values]
-
-
-
     out_df.to_parquet(out_path, index=False)
-
 
     digest = _sha256_file(out_path)
     return int(len(out_df)), digest
+
 
 
 def _write_manifest(out_dir: Path, items: list[dict]) -> None:
