@@ -1,0 +1,219 @@
+#!/usr/bin/env python3
+"""
+Create a small committed canary dataset from a large parquet lake.
+
+Design goals:
+- Deterministic slicing by symbol + [start, end)
+- Preserve original columns as-is (no feature engineering here)
+- Write a MANIFEST.json with per-file sha256 to support regression gates
+- Avoid guessing timestamp units: support --ts-unit {auto,s,ms,us,ns}
+
+Usage example:
+python tools/make_canary_from_lake.py \
+  --lake-dir parquet \
+  --out-dir data_canary \
+  --symbols BTCUSDT ETHUSDT \
+  --start "2024-01-01T00:00:00Z" \
+  --end   "2024-02-01T00:00:00Z" \
+  --ts-unit auto
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Iterable, Optional, Tuple
+
+import pandas as pd
+
+
+TS_CANDIDATES = ("timestamp", "ts", "time", "datetime", "open_time", "close_time")
+
+
+def _parse_iso_utc(s: str) -> pd.Timestamp:
+    # pd.Timestamp handles Z; ensure tz-aware UTC
+    ts = pd.Timestamp(s)
+    if ts.tzinfo is None:
+        ts = ts.tz_localize("UTC")
+    else:
+        ts = ts.tz_convert("UTC")
+    return ts
+
+
+def _sha256_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        while True:
+            b = f.read(chunk_size)
+            if not b:
+                break
+            h.update(b)
+    return h.hexdigest()
+
+
+def _detect_ts_col(df: pd.DataFrame, ts_col: Optional[str]) -> str:
+    if ts_col:
+        if ts_col not in df.columns:
+            raise ValueError(f"--ts-col {ts_col!r} not found in columns={list(df.columns)}")
+        return ts_col
+    cols_l = {c.lower(): c for c in df.columns}
+    for cand in TS_CANDIDATES:
+        if cand in cols_l:
+            return cols_l[cand]
+    raise ValueError(
+        f"Could not detect timestamp column. Provide --ts-col. "
+        f"Looked for {TS_CANDIDATES}. Columns={list(df.columns)}"
+    )
+
+
+def _normalize_ts_series(s: pd.Series, ts_unit: str) -> pd.DatetimeIndex:
+    """
+    Convert a timestamp-like Series into tz-aware UTC datetime index.
+
+    Supports:
+    - datetime-like strings
+    - pandas datetime
+    - integer epochs (unit set by --ts-unit or auto heuristic)
+    """
+    if pd.api.types.is_datetime64_any_dtype(s):
+        ts = pd.to_datetime(s, utc=True)
+        return ts
+
+    if pd.api.types.is_object_dtype(s) or pd.api.types.is_string_dtype(s):
+        ts = pd.to_datetime(s, utc=True, errors="raise")
+        return ts
+
+    if pd.api.types.is_integer_dtype(s) or pd.api.types.is_float_dtype(s):
+        vals = s.astype("int64")
+
+        unit = ts_unit
+        if unit == "auto":
+            # Heuristic based on magnitude; user can override.
+            v = int(vals.iloc[0])
+            # seconds ~ 1e9..1e10, ms ~ 1e12..1e13, us ~ 1e15.., ns ~ 1e18..
+            if v >= 10**17:
+                unit = "ns"
+            elif v >= 10**14:
+                unit = "us"
+            elif v >= 10**11:
+                unit = "ms"
+            else:
+                unit = "s"
+
+        ts = pd.to_datetime(vals, utc=True, unit=unit)
+        return ts
+
+    raise TypeError(f"Unsupported timestamp dtype: {s.dtype}")
+
+
+def _list_symbol_files(lake_dir: Path, symbol: str) -> list[Path]:
+    # Common patterns: parquet/<SYMBOL>.parquet or parquet/<SYMBOL>/*.parquet
+    direct = lake_dir / f"{symbol}.parquet"
+    if direct.exists():
+        return [direct]
+    sub = lake_dir / symbol
+    if sub.exists() and sub.is_dir():
+        return sorted(p for p in sub.glob("*.parquet") if p.is_file())
+    # fallback: try case variations
+    direct2 = lake_dir / f"{symbol.upper()}.parquet"
+    if direct2.exists():
+        return [direct2]
+    raise FileNotFoundError(f"Could not find parquet for symbol={symbol!r} in lake_dir={lake_dir}")
+
+
+@dataclass(frozen=True)
+class SliceSpec:
+    start: pd.Timestamp
+    end: pd.Timestamp
+    ts_col: Optional[str]
+    ts_unit: str
+
+
+def _slice_one_file(in_path: Path, out_path: Path, symbol: str, spec: SliceSpec) -> Tuple[int, str]:
+    df = pd.read_parquet(in_path)
+    ts_col = _detect_ts_col(df, spec.ts_col)
+    ts = _normalize_ts_series(df[ts_col], spec.ts_unit)
+
+    mask = (ts >= spec.start) & (ts < spec.end)
+    out_df = df.loc[mask].copy()
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_df.to_parquet(out_path, index=False)
+
+    digest = _sha256_file(out_path)
+    return int(len(out_df)), digest
+
+
+def _write_manifest(out_dir: Path, items: list[dict]) -> None:
+    manifest = {
+        "schema_version": 1,
+        "created_utc": datetime.now(timezone.utc).isoformat(),
+        "items": items,
+    }
+    (out_dir / "MANIFEST.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+
+def main(argv: Optional[Iterable[str]] = None) -> int:
+    p = argparse.ArgumentParser()
+    p.add_argument("--lake-dir", required=True, help="Input lake dir (server-only), e.g. parquet/")
+    p.add_argument("--out-dir", required=True, help="Output dir, e.g. data_canary/")
+    p.add_argument("--symbols", nargs="+", required=True, help="Symbols to include, e.g. BTCUSDT ETHUSDT")
+    p.add_argument("--start", required=True, help='ISO start, e.g. "2024-01-01T00:00:00Z"')
+    p.add_argument("--end", required=True, help='ISO end (exclusive), e.g. "2024-02-01T00:00:00Z"')
+    p.add_argument("--ts-col", default=None, help="Timestamp column name (optional). If omitted, auto-detect.")
+    p.add_argument(
+        "--ts-unit",
+        default="auto",
+        choices=("auto", "s", "ms", "us", "ns"),
+        help="Epoch unit for integer timestamps. Use 'auto' or specify explicitly.",
+    )
+    args = p.parse_args(list(argv) if argv is not None else None)
+
+    lake_dir = Path(args.lake_dir)
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    start = _parse_iso_utc(args.start)
+    end = _parse_iso_utc(args.end)
+    if end <= start:
+        raise ValueError(f"--end must be > --start (got start={start}, end={end})")
+
+    spec = SliceSpec(start=start, end=end, ts_col=args.ts_col, ts_unit=args.ts_unit)
+
+    items: list[dict] = []
+    for sym in args.symbols:
+        files = _list_symbol_files(lake_dir, sym)
+        for in_path in files:
+            # Write to data_canary/<SYMBOL>.parquet (flattened).
+            out_path = out_dir / f"{sym}.parquet"
+            n_rows, sha = _slice_one_file(in_path, out_path, sym, spec)
+            items.append(
+                {
+                    "symbol": sym,
+                    "input": str(in_path),
+                    "output": str(out_path),
+                    "rows": n_rows,
+                    "sha256": sha,
+                    "start_utc": str(start),
+                    "end_utc": str(end),
+                    "ts_col": spec.ts_col,
+                    "ts_unit": spec.ts_unit,
+                }
+            )
+            # If symbol maps to multiple files, last one wins in flattened output;
+            # for that case, prefer lake format with one file per symbol.
+            break
+
+    _write_manifest(out_dir, items)
+    print(f"Wrote canary dataset to: {out_dir}")
+    print(f"Manifest: {out_dir / 'MANIFEST.json'}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,2 +1,26 @@
-# Ignore specific folders
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+ruff_cache/
+.coverage
+htmlcov/
+
+# OS/editor
+.DS_Store
+.vscode/
+.idea/
+
+# Large datasets (server-only)
 parquet/
+
+# Local run artifacts (keep canary + tests committed)
+reports/
+*.log
+
+# If you later want to commit a small example report:
+# !reports/examples/**
