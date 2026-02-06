@@ -1,35 +1,51 @@
 # STATE (single source of truth)
 
-Phase: Workflow/Canary harness COMPLETE
-
 Repo: whywouldanyonedodrugs/fader2test
-Branch: main
+Working dir (machine): /opt/fader2
 
-Non-negotiables
-- No guessing. If a fact isn’t verified from repo/files/logs, ask for the missing artifact.
-- Canary gate required before/after meaningful changes:
-  - python tools/run_upstream_canary.py
-  - python tools/run_shortonly_canary.py
-  - python tools/compare_upstream_shortonly_canary.py
-  - python tools/check_canary.py (if used as a gate)
-- Do not create “new versions” of STATE.md; propose minimal diffs only.
+## Phase
+Workflow + canary harness complete. Upstream snapshot frozen; shortonly bootstrapped from upstream.
 
-Last known good canary
-- Baseline file: Docs/baselines/BASELINE_UPSTREAM_CANARY.json
-- Last upstream canary run: [YYYY-MM-DD] (host: TESTMACHINE)
-- Last compare result: MATCH (upstream == shortonly)
+## Non-negotiables
+- No-guessing policy: if a fact/semantics is unknown, stop and require the source (code/docs/output).
+- Upstream parity is sacred: upstream_longonly behavior must not change after baseline is recorded.
+- No 1m intrabar data: intrabar modules must be optional; USE_INTRABAR_1M=False.
 
-Current canary inputs
-- Symbols: symbols_canary.txt (10 syms)
-- Window: 2024-01-01 .. 2024-05-31
-- Lake source: /opt/testerdonch/parquet (local only)
+## Canary definition
+Dataset:
+- Source lake: /opt/testerdonch/parquet (local; not committed)
+- Symbols: symbols_canary.txt (10 symbols)
+- Window: 2024-01-01T00:00:00Z .. 2024-06-01T00:00:00Z
+Outputs (local; not committed): reports/upstream_* and reports/shortonly_*
 
-Next 3 tickets
-1) [ticket]
-2) [ticket]
-3) [ticket]
+Runners:
+- tools/run_upstream_canary.py
+- tools/run_shortonly_canary.py
+- tools/compare_upstream_shortonly_canary.py
+- tools/snapshot_upstream_canary.py
+Gate:
+- tools/check_canary.py (must pass before merge)
 
-How work is executed
-- Supervisor chat: decides next ticket, defines acceptance, reviews diffs/logs.
-- Codex/agent chat: writes code patches per ticket (no repo history assumptions).
-- Human operator: applies patch, runs canary gates, commits.
+## Recorded baselines (committed)
+- Docs/baselines/BASELINE_UPSTREAM_CANARY.json
+  - signals_rows=457, trades_rows=59 (see file for fingerprints)
+
+## Current status (last known good)
+- Upstream canary: PASS
+- Shortonly canary vs upstream: MATCH (fingerprints identical)
+- Baseline snapshot written: reports/upstream_results/BASELINE_UPSTREAM_CANARY.json then copied to Docs/baselines/
+
+## Next 3 tickets
+1) Commit Docs/STATE.md (this file) and keep it updated on every meaningful merge.
+2) Decide execution model:
+   - Supervisor chat defines tickets + acceptance.
+   - Codex executes edits + runs local canary + updates STATE.md.
+3) Decide CI approach:
+   - Local-only canary gate (default), OR
+   - Self-hosted GitHub Actions runner to execute canaries on the data machine.
+
+## How to run the gate (local)
+python tools/run_upstream_canary.py
+python tools/run_shortonly_canary.py
+python tools/compare_upstream_shortonly_canary.py
+python tools/check_canary.py --baseline Docs/baselines/BASELINE_UPSTREAM_CANARY.json
