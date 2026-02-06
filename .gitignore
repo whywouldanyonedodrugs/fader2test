@@ -24,3 +24,13 @@ reports/
 
 # If you later want to commit a small example report:
 # !reports/examples/**
+
+# local runtime / data
+.venv/
+data_canary/
+reports/
+upstream_longonly/parquet
+upstream_longonly/parquet_1m
+upstream_longonly/results
+upstream_longonly/signals
+upstream_longonly/symbols.txt
