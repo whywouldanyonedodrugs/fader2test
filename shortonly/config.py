@@ -65,7 +65,7 @@ ATR_TIMEFRAME: str | None = "1h"     # e.g., "1h", "4h", "1D"; None => use base 
 ATR_LEN: int = 14
 
 # --- Regime filter (ETH 4h MACD histogram)
-REGIME_FILTER_ENABLED: bool = True
+REGIME_FILTER_ENABLED: bool = False
 REGIME_ASSET: str = "ETHUSDT"
 REGIME_TIMEFRAME: str = "4h"
 REGIME_MACD_FAST: int = 12
@@ -191,7 +191,7 @@ if LABELING_MODE:
 
 # --- Meta gating / sizing ---
 META_PROB_THRESHOLD: float | None = None
-META_SIZING_ENABLED: bool = True
+META_SIZING_ENABLED: bool = False
 META_SIZING_P0: float = 0.60
 META_SIZING_P1: float = 0.90
 META_SIZING_MIN: float = 0.01
@@ -251,7 +251,7 @@ CROWD_Z_LOW: float = -1.0   # "low" (negative) z-score threshold
 
 
 # --- Meta online scoring (optional; backtester only) ---
-BT_META_ONLINE_ENABLED: bool = True  # if True, backtester computes meta_p via WinProbScorer instead of using offline META_PRED_PATH
+BT_META_ONLINE_ENABLED: bool = False  # if True, backtester computes meta_p via WinProbScorer instead of using offline META_PRED_PATH
 
 # Directory with meta artifacts (model, ohe, calibrator, feature_names.json, pstar.txt)
 # Adjust if your training/export scripts write elsewhere.
@@ -266,5 +266,4 @@ REGIME_SLOPE_FILTER_ENABLED: bool = False   # turn this ON to gate by slope
 REGIME_SLOPE_MIN: float = 0.0             # require macd_hist_slope >= this at entry
 
 META_STRICT_SCHEMA = True
-
 
