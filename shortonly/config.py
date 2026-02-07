@@ -140,7 +140,7 @@ BT_DECISION_LOG_ENABLED: bool = False
 
 # --- Variant guardrails (NEW)
 MAX_TRADES_PER_VARIANT: int = 10000000
-MIN_EQUITY_FRACTION_BEFORE_ABORT: float = 0.05  # 20% of initial
+MIN_EQUITY_FRACTION_BEFORE_ABORT: float = 0.0
 MIN_ATR_PCT_OF_PRICE: float = 0.0001             # skip micro-stops (ATR < 0.1% of price)
 
 # --- Reporting
@@ -266,4 +266,3 @@ REGIME_SLOPE_FILTER_ENABLED: bool = False   # turn this ON to gate by slope
 REGIME_SLOPE_MIN: float = 0.0             # require macd_hist_slope >= this at entry
 
 META_STRICT_SCHEMA = True
-

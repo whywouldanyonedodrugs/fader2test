@@ -2,7 +2,8 @@
 
 ## Code zones
 - upstream_longonly/  (imported snapshot; do not edit)
-- fader2/             (refactor target; becomes short-only)
+- shortonly/          (active short-only strategy + sweeps)
+- fader2/             (reserved/legacy folder; currently not the active runtime path)
 - tools/              (utilities)
 - tests/              (Tier A + characterization + regression)
 
@@ -12,18 +13,21 @@
 - Docs/short_only_spec.md       (explicit short-only semantics)
 - Docs/meta_model_contract.md   (meta gating/sizing contract)
 
-## Entry points (TO FILL AFTER IMPORT)
-Upstream:
-- runner path:
-- backtester path:
-- scout path:
+## Entry points
+Upstream canary:
+- `tools/run_upstream_canary.py`
+- `upstream_longonly/scout.py`
+- `upstream_longonly/backtester.py`
 
-Refactor:
-- runner path:
-- backtester path:
-- signal generator path:
+Short-only runtime:
+- `shortonly/sweep_mr_short_params_guarded.py`
+- `shortonly/scout.py`
+- `shortonly/backtester.py`
 
-## Tests (TO FILL)
-- Tier A:
-- Characterization (upstream vs refactor long-compat):
-- Canary regressions:
+Canary gate:
+- `tools/canary_all.sh`
+- `tools/check_canary.py`
+
+## Tests / verification
+- Canary parity and baseline checks are implemented via `tools/check_canary.py`.
+- `tests/` is currently minimal; most regression coverage is canary-based at present.

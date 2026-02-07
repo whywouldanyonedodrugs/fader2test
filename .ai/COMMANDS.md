@@ -20,7 +20,7 @@ source .venv/bin/activate
 
 ## 1) Regenerate canary dataset (from lake)
 rm -rf data_canary
-python tools/make_canary_from_lake.py \
+./.venv/bin/python tools/make_canary_from_lake.py \
   --lake-dir /opt/testerdonch/parquet \
   --out-dir data_canary \
   --symbols $(tr '\n' ' ' < symbols_canary.txt) \
@@ -30,20 +30,30 @@ python tools/make_canary_from_lake.py \
 
 ## 2) Run upstream canary
 rm -rf reports/upstream_signals/* reports/upstream_results/*
-python tools/run_upstream_canary.py
+./.venv/bin/python tools/run_upstream_canary.py
 
 ## 3) Snapshot upstream (for diagnostics; baseline is committed separately)
-python tools/snapshot_upstream_canary.py
+./.venv/bin/python tools/snapshot_upstream_canary.py
 
 ## 4) Run shortonly canary
 rm -rf reports/shortonly_signals/* reports/shortonly_results/*
-python tools/run_shortonly_canary.py
+./.venv/bin/python tools/run_shortonly_canary.py
 
 ## 5) Compare
-python tools/compare_upstream_shortonly_canary.py
+./.venv/bin/python tools/compare_upstream_shortonly_canary.py
 
 ## 6) Gate (REQUIRED before PR/merge)
 # Phase-0 parity (current):
-python tools/check_canary.py --mode parity
+./.venv/bin/python tools/check_canary.py --mode parity --clean
 # If/when Phase-1 baseline mode is enabled for shortonly:
-# python tools/check_canary.py --mode baseline --target shortonly --baseline Docs/baselines/BASELINE_SHORTONLY_CANARY.json
+# ./.venv/bin/python tools/check_canary.py --mode baseline --target shortonly --baseline Docs/baselines/BASELINE_SHORTONLY_CANARY.json
+
+## 7) Full short sweep (long run; use tmux)
+rm -rf shortonly/parquet
+ln -s /opt/fader2/parquet shortonly/parquet
+ls -1 shortonly/parquet | grep '\.parquet$' | sed 's/\.parquet$//' > shortonly/symbols.txt
+wc -l shortonly/symbols.txt
+for arc in breakdown_retest_vwap avwap_lower_high_reject funding_spike_crowding_fade; do
+  echo ">>> STARTING SWEEP: $arc"
+  ./.venv/bin/python shortonly/sweep_mr_short_params_guarded.py --archetype "$arc"
+done

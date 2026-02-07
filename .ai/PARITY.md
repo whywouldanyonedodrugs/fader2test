@@ -20,6 +20,9 @@ A change is acceptable only if:
 3) `tools/compare_upstream_shortonly_canary.py` returns OK,
 4) and if upstream baseline is intended to remain stable, upstream fingerprints match the committed baseline JSON.
 
+Recommended single command:
+- `./tools/canary_all.sh`
+
 ## If it fails
 - Do not change upstream to “make it pass” unless fixing a proven bug that exists in upstream itself.
 - Diagnose by diffing: signals rows/fp → trades rows/fp → equity fp → RS fp → lock fp.
@@ -28,3 +31,4 @@ A change is acceptable only if:
 ## Local gate requirement (process rule)
 - The acceptance evidence must come from a local run on the data machine (where data_canary exists).
 - CI (including a self-hosted runner) may mirror the same checks, but does not waive the local gate requirement.
+- If process-based parallel workers are blocked by environment permissions, run from the server/tmux environment where canary workers can spawn normally.

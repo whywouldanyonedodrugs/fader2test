@@ -1,40 +1,37 @@
 # STATE (single source of truth)
 
-Repo: whywouldanyonedodrugs/fader2test
-Working dir (machine): /opt/fader2
+Repo: `/opt/fader2`  
+Working dir (machine): `/opt/fader2`
 
 ## Phase
-Phase 2 In Progress (Short-Only Refactor).
-Ticket 2.1 complete: short execution engine enabled; signals temporarily tagged `side="short"` for plumbing verification.
+Short-only strategy development is active in `shortonly/` with boom/stall/trigger signals and guarded sweeps.
 
 ## Non-negotiables
-- No-guessing policy: if a fact/semantics is unknown, stop and require the source (code/docs/output).
-- Upstream parity is sacred: upstream_longonly behavior must not change.
-- Local canary gate required: `tools/canary_all.sh` must PASS before any merge.
-- CI is advisory: The self-hosted runner mirrors the local gate, but local verification is still mandatory.
+- No guessing: claims must be backed by code/docs/output.
+- `upstream_longonly/` is frozen reference code and should not be edited.
+- Local canary verification is required before merge (`tools/canary_all.sh` or equivalent `tools/check_canary.py` runs).
+- CI mirrors local checks but does not replace local validation.
 
 ## Canary definition
 Dataset:
-- Source lake: /opt/testerdonch/parquet (local; not committed)
-- Symbols: symbols_canary.txt (10 symbols)
-- Window: 2024-01-01T00:00:00Z .. 2024-06-01T00:00:00Z
+- Source lake: `/opt/testerdonch/parquet` (local; not committed)
+- Symbols: `symbols_canary.txt` (10 symbols)
+- Window: `2024-01-01T00:00:00Z` .. `2024-06-01T00:00:00Z`
 
 Runners:
-- Primary: tools/canary_all.sh (Runs parity + baseline check)
-- Underlying: tools/check_canary.py
+- Primary: `tools/canary_all.sh`
+- Underlying: `tools/check_canary.py`
 
-## Recorded baselines (committed)
-- Docs/baselines/BASELINE_UPSTREAM_CANARY.json
-  - signals_rows=457, trades_rows=59 (primary anchor)
+## Recorded baseline (committed)
+- `Docs/baselines/BASELINE_UPSTREAM_CANARY.json`
+  - signals_rows=`457`, trades_rows=`59`
 
-## Current status
-- Parity: Expected FAIL (short engine enabled; legacy signals are tagged short for testing)
-- Baseline: Upstream still the reference; run baseline check directly when parity is expected to fail
-- CI: Configured on self-hosted runner (.github/workflows/canary.yml)
-
-## Next Tickets (Phase 2)
-1) Ticket 2.2: Delete Donchian logic and implement Boom/Stall/Trigger signal generation.
-2) Create a new shortonly baseline once the new strategy is intentional and stable.
+## Current runtime defaults (short sweep)
+- Universe source: `shortonly/symbols.txt`
+- Timeframe defaults: `shortonly/config.py` (`START_DATE="2023-01-01"`, `END_DATE="2025-11-15"`)
+- Sweep entry point: `shortonly/sweep_mr_short_params_guarded.py`
 
 ## How to run the gate (local)
-bash tools/canary_all.sh
+```bash
+./tools/canary_all.sh
+```

@@ -9,10 +9,12 @@ Refactor/port a proven long-only system into a clean short-only backtester while
 - Never modified.
 - Used only for characterization parity and contract reference.
 
-2) `fader2/` (refactored implementation)
-- New canonical code.
-- Eventually short-only.
-- May include a temporary long-compat mode to validate refactor correctness.
+2) `shortonly/` (active implementation)
+- Current canonical runtime for short strategy and sweeps.
+- Owns scout/backtester/config/sweep stack.
+
+3) `fader2/` (reserved)
+- Present in repo but not the active runtime path today.
 
 ## Critical sub-systems (must be preserved mechanically)
 A) Data loader (5m; optional 1m)
@@ -35,12 +37,15 @@ E) Regimes
 - Any regime feature used for training/gating must be past-only (no smoothed probabilities / lookahead).
 - 4h filtered Markov is acceptable; daily smoothed Markov is not.
 
-## Output artifacts (target)
-Each run writes to `reports/<run_id>/`:
-- `config_snapshot.json`
-- `metrics.json`
-- `trades.parquet` (canonical schema)
-- optional curves: `equity_curve.parquet`, `positions.parquet`
+## Output artifacts (current)
+Canary runs write under `reports/`:
+- `reports/upstream_signals/`, `reports/upstream_results/`
+- `reports/shortonly_signals/`, `reports/shortonly_results/`
+
+Short sweeps write under `shortonly/results/`:
+- `leaderboard_guarded.csv`
+- `sweeps/<variant>/trades.csv`
+- `sweeps/<variant>/equity.csv`
 
 ## Refactor stages (safe sequence)
 Stage 0: Import upstream long-only code into `upstream_longonly/` + restore missing dependencies.

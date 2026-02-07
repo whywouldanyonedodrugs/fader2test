@@ -1,21 +1,23 @@
-# Canary workflow (Phase-2 In Progress)
+# Canary workflow
 
 ## Unified Gate
 The primary entry point for all safety checks is now:
 
-bash tools/canary_all.sh
+```bash
+./tools/canary_all.sh
+```
 
 This script automatically:
 1. Runs the Parity Check (Upstream vs Shortonly).
 2. Runs the Baseline Check (Upstream vs Committed JSON).
 3. Fails fast if any step errors.
 
-### Phase 2 note
-During Ticket 2.1 (short execution plumbing), we intentionally tag legacy signals as `side="short"`.
-Parity is expected to FAIL until the Boom/Stall/Trigger signals are implemented and a shortonly baseline is created.
-If parity is expected to fail, run the upstream baseline check directly to confirm stability:
+If you need to run checks separately:
 
-python tools/check_canary.py --mode baseline --target upstream --baseline Docs/baselines/BASELINE_UPSTREAM_CANARY.json
+```bash
+./.venv/bin/python tools/check_canary.py --mode parity --clean
+./.venv/bin/python tools/check_canary.py --mode baseline --target upstream --baseline Docs/baselines/BASELINE_UPSTREAM_CANARY.json
+```
 
 ## CI / Automation
 - A self-hosted GitHub Actions runner is configured to run `tools/canary_all.sh` on every push to `main`.
@@ -25,23 +27,31 @@ python tools/check_canary.py --mode baseline --target upstream --baseline Docs/b
 If `canary_all.sh` fails, you can debug using the individual tools:
 
 ### Run the Phase-0 parity gate (fast regression)
-python tools/check_canary.py --mode parity
+```bash
+./.venv/bin/python tools/check_canary.py --mode parity --clean
+```
 
 ### Validate against committed baseline
-python tools/check_canary.py --mode baseline --target upstream --baseline Docs/baselines/BASELINE_UPSTREAM_CANARY.json
+```bash
+./.venv/bin/python tools/check_canary.py --mode baseline --target upstream --baseline Docs/baselines/BASELINE_UPSTREAM_CANARY.json
+```
 
 ### Regenerate canary data slice (server-only)
-python tools/make_canary_from_lake.py \
+```bash
+./.venv/bin/python tools/make_canary_from_lake.py \
   --lake-dir /opt/testerdonch/parquet \
   --out-dir data_canary \
   --symbols $(tr '\n' ' ' < symbols_canary.txt) \
   --start "2024-01-01T00:00:00Z" \
   --end   "2024-06-01T00:00:00Z" \
   --ts-unit auto
+```
 
-## Process for Phase 2 (Refactoring)
-When we are changing `shortonly` logic:
-1. Run `tools/canary_all.sh` (Parity will fail as intended).
-2. Verify `upstream` baseline still passes (regression check).
-3. Create a NEW baseline for the new behavior:
-   python tools/check_canary.py --mode baseline --target shortonly --write-baseline Docs/baselines/BASELINE_SHORTONLY_V2.json
+## Updating a baseline intentionally
+When behavior changes are intentional and approved:
+```bash
+./.venv/bin/python tools/check_canary.py \
+  --mode baseline \
+  --target shortonly \
+  --write-baseline Docs/baselines/BASELINE_SHORTONLY_<TAG>.json
+```

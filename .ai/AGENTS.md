@@ -44,3 +44,5 @@ After editing, run the canary loop in `.ai/COMMANDS.md` and report fingerprints.
 Role boundary (enforced):
 - Supervisor produces: ticket + acceptance + allowed files + gate mode/baseline + any “upstream off-limits” constraints.
 - Codex produces: minimal patch + exact command transcript + gate PASS evidence.
+
+- **Codex Test Execution:** Codex IS ALLOWED to run read-only verification commands (e.g., unit tests, dry-run sweeps, ls, cat) to verify work. Significant mutations still require Operator confirmation.

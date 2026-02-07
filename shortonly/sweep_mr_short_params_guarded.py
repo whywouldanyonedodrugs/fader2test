@@ -276,6 +276,7 @@ def main():
     print(f"Total variants: {len(variants)}")
 
     leaderboard = []
+    leaderboard_path = RESULTS / "leaderboard_guarded.csv"
     sweeps_dir = RESULTS / "sweeps"
     sweeps_dir.mkdir(parents=True, exist_ok=True)
 
@@ -323,6 +324,12 @@ def main():
             "trail_atr": tr_mult if tr_mult is not None else np.nan,
         })
         leaderboard.append(m)
+        # Persist after each completed variant so long sweeps can resume safely.
+        try:
+            pd.DataFrame(leaderboard).to_csv(leaderboard_path, index=False)
+            print(f"Saved intermediate leaderboard ({len(leaderboard)} rows) -> {leaderboard_path}")
+        except Exception as e:
+            print(f"Warning: Failed to save intermediate csv: {e}")
 
     lb = pd.DataFrame(leaderboard)
     if lb.empty:
@@ -333,9 +340,8 @@ def main():
     sort_cols = [("profit_factor", False), ("avg_R", False), ("max_dd", True), ("mar", False), ("win_rate", False)]
     lb = lb.sort_values([c for c,_ in sort_cols], ascending=[a for _,a in sort_cols])
 
-    out = RESULTS / "leaderboard_guarded.csv"
-    lb.to_csv(out, index=False)
-    print(f"Saved leaderboard → {out}")
+    lb.to_csv(leaderboard_path, index=False)
+    print(f"Saved leaderboard -> {leaderboard_path}")
     with pd.option_context("display.max_colwidth", None):
         print(lb.head(15).to_string(index=False))
 
